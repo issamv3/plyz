@@ -479,7 +479,7 @@ class FacebookExtractorService {
     return null;
   }
 
-  String? extractFacebookVideoId(String url) {
+  static String? extractFacebookVideoId(String url) {
     final clean = url.trim().replaceAll('&amp;', '&');
     if (RegExp(r'^\d{5,30}$').hasMatch(clean)) {
       return clean;
