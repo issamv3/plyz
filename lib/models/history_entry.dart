@@ -30,16 +30,34 @@ class HistoryEntry {
   double get progress =>
       durationMs > 0 ? (positionMs / durationMs).clamp(0.0, 1.0) : 0.0;
   bool get isFinished => progress > 0.96;
-  bool get isFacebook =>
-      (originalFbUrl != null && originalFbUrl!.isNotEmpty) ||
-      (fbVideoId != null && fbVideoId!.isNotEmpty) ||
-      fbCdnEnabled ||
-      videoPath.contains('facebook.com') ||
-      videoPath.contains('fbcdn.net') ||
-      videoPath.contains('fb.watch') ||
-      (mpdContent != null &&
-          (mpdContent!.contains('fbcdn.net') ||
-              mpdContent!.contains('facebook.com')));
+  bool get isFacebook {
+    if (originalFbUrl != null && originalFbUrl!.isNotEmpty) {
+      final u = originalFbUrl!.toLowerCase();
+      if (u.contains('facebook.com') ||
+          u.contains('fb.watch') ||
+          u.contains('fb.me') ||
+          u.contains('fb.gg')) {
+        return true;
+      }
+    }
+    if (fbVideoId != null && fbVideoId!.isNotEmpty) {
+      return true;
+    }
+    final path = videoPath.toLowerCase();
+    if (path.contains('facebook.com') ||
+        path.contains('fb.watch') ||
+        path.contains('fb.me') ||
+        path.contains('fbcdn.net')) {
+      return true;
+    }
+    if (mpdContent != null) {
+      final mpd = mpdContent!.toLowerCase();
+      if (mpd.contains('facebook.com') || mpd.contains('fbcdn.net')) {
+        return true;
+      }
+    }
+    return false;
+  }
   bool get isDownloaded =>
       !isNetwork ||
       videoPath.startsWith('/') ||

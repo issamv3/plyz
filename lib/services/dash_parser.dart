@@ -28,45 +28,50 @@ class DashParser {
     final representations = <DashRepresentation>[];
     try {
       final document = XmlDocument.parse(xmlContent);
-      for (final period in document.findAllElements('Period')) {
-        for (final adaptationSet in period.findElements('AdaptationSet')) {
-          final contentType = _resolveContentType(adaptationSet);
-          if (contentType != wantedType) continue;
+      final adaptationSets = document.findAllElements('AdaptationSet').toList();
 
-          final setBaseUrl = _extractBaseUrl(adaptationSet);
+      for (final adaptationSet in adaptationSets) {
+        final setContentType = _resolveContentType(adaptationSet);
+        final setBaseUrl = _extractBaseUrl(adaptationSet);
 
-          for (final rep in adaptationSet.findElements('Representation')) {
-            final id = rep.getAttribute('id') ?? '';
-            final bandwidth =
-                int.tryParse(rep.getAttribute('bandwidth') ?? '0') ?? 0;
-            final width =
-                int.tryParse(rep.getAttribute('width') ?? '0') ?? 0;
-            final height =
-                int.tryParse(rep.getAttribute('height') ?? '0') ?? 0;
+        for (final rep in adaptationSet.findElements('Representation')) {
+          final repContentType = _resolveContentType(rep);
+          final effectiveType = repContentType.isNotEmpty
+              ? repContentType
+              : setContentType;
 
-            final rawLabel = wantedType == 'video'
-                ? (rep.getAttribute('FBQualityLabel') ??
-                    rep.getAttribute('qualityLabel') ??
-                    (height > 0 ? '${height}p' : '${bandwidth ~/ 1000}kbps'))
-                : (rep.getAttribute('audioSamplingRate') != null
-                    ? '${rep.getAttribute('audioSamplingRate')} Hz'
-                    : 'Audio');
+          if (effectiveType != wantedType) continue;
 
-            final repBaseUrl = _extractBaseUrl(rep);
-            final baseUrl =
-                repBaseUrl.isNotEmpty ? repBaseUrl : setBaseUrl;
+          final id = rep.getAttribute('id') ?? '';
+          final bandwidth =
+              int.tryParse(rep.getAttribute('bandwidth') ?? '0') ?? 0;
+          final width =
+              int.tryParse(rep.getAttribute('width') ?? '0') ?? 0;
+          final height =
+              int.tryParse(rep.getAttribute('height') ?? '0') ?? 0;
 
-            if (baseUrl.isNotEmpty) {
-              representations.add(DashRepresentation(
-                id: id,
-                baseUrl: baseUrl,
-                bandwidth: bandwidth,
-                width: width,
-                height: height,
-                contentType: wantedType,
-                qualityLabel: rawLabel,
-              ));
-            }
+          final rawLabel = wantedType == 'video'
+              ? (rep.getAttribute('FBQualityLabel') ??
+                  rep.getAttribute('qualityLabel') ??
+                  (height > 0 ? '${height}p' : '${bandwidth ~/ 1000}kbps'))
+              : (rep.getAttribute('audioSamplingRate') != null
+                  ? '${rep.getAttribute('audioSamplingRate')} Hz'
+                  : 'Audio');
+
+          final repBaseUrl = _extractBaseUrl(rep);
+          final baseUrl =
+              repBaseUrl.isNotEmpty ? repBaseUrl : setBaseUrl;
+
+          if (baseUrl.isNotEmpty) {
+            representations.add(DashRepresentation(
+              id: id,
+              baseUrl: baseUrl,
+              bandwidth: bandwidth,
+              width: width,
+              height: height,
+              contentType: wantedType,
+              qualityLabel: rawLabel,
+            ));
           }
         }
       }
@@ -134,24 +139,57 @@ class DashParser {
   }
 
   static String _resolveContentType(XmlElement el) {
-    final direct = el.getAttribute('contentType');
-    if (direct != null && direct.isNotEmpty) return direct;
+    final direct = el.getAttribute('contentType')?.toLowerCase();
+    if (direct == 'video' || direct == 'audio') return direct!;
 
-    final mime = el.getAttribute('mimeType') ?? '';
+    final mime = (el.getAttribute('mimeType') ?? '').toLowerCase();
     if (mime.startsWith('video/')) return 'video';
     if (mime.startsWith('audio/')) return 'audio';
 
+    final codecs = (el.getAttribute('codecs') ?? '').toLowerCase();
+    if (codecs.startsWith('avc') ||
+        codecs.startsWith('mp4v') ||
+        codecs.startsWith('hvc') ||
+        codecs.startsWith('hev') ||
+        codecs.startsWith('vp8') ||
+        codecs.startsWith('vp9') ||
+        codecs.startsWith('av01')) {
+      return 'video';
+    }
+    if (codecs.startsWith('mp4a') ||
+        codecs.startsWith('opus') ||
+        codecs.startsWith('aac') ||
+        codecs.contains('audio')) {
+      return 'audio';
+    }
+
+    if (el.getAttribute('audioSamplingRate') != null ||
+        el.findAllElements('AudioChannelConfiguration').isNotEmpty) {
+      return 'audio';
+    }
+
+    final width = int.tryParse(el.getAttribute('width') ?? '0') ?? 0;
+    final height = int.tryParse(el.getAttribute('height') ?? '0') ?? 0;
+    if (width > 0 || height > 0 || el.getAttribute('frameRate') != null) {
+      return 'video';
+    }
+
     for (final child in el.children.whereType<XmlElement>()) {
-      final childMime = child.getAttribute('mimeType') ?? '';
-      if (childMime.startsWith('video/')) return 'video';
-      if (childMime.startsWith('audio/')) return 'audio';
+      final childType = _resolveContentType(child);
+      if (childType.isNotEmpty) return childType;
     }
     return '';
   }
 
   static String _extractBaseUrl(XmlElement el) {
     final nodes = el.findElements('BaseURL');
-    if (nodes.isEmpty) return '';
-    return nodes.first.innerText.trim();
+    if (nodes.isNotEmpty && nodes.first.innerText.trim().isNotEmpty) {
+      return nodes.first.innerText.trim();
+    }
+    final allBaseUrls = el.findAllElements('BaseURL');
+    if (allBaseUrls.isNotEmpty && allBaseUrls.first.innerText.trim().isNotEmpty) {
+      return allBaseUrls.first.innerText.trim();
+    }
+    return '';
   }
 }

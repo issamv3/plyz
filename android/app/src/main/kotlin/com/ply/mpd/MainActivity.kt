@@ -399,6 +399,7 @@ class MainActivity : FlutterActivity() {
 
                 var audioTrackIn = -1
                 var audioTrackOut = -1
+                var effectiveAudioExtractor: MediaExtractor? = null
                 if (audioPath != null && audioExtractor != null) {
                     audioExtractor.setDataSource(audioPath)
                     for (i in 0 until audioExtractor.trackCount) {
@@ -407,6 +408,7 @@ class MainActivity : FlutterActivity() {
                         if (mime.startsWith("audio/")) {
                             audioTrackIn = i
                             audioTrackOut = muxer.addTrack(fmt)
+                            effectiveAudioExtractor = audioExtractor
                             break
                         }
                     }
@@ -414,16 +416,22 @@ class MainActivity : FlutterActivity() {
 
                 muxer.start()
 
-                val bufSize = 1 * 1024 * 1024
-                val videoBuf = ByteBuffer.allocate(bufSize)
-                val audioBuf = ByteBuffer.allocate(bufSize)
+                val videoFormat = videoExtractor.getTrackFormat(videoTrackIn)
+                val maxVideoSize = if (videoFormat.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
+                    try { videoFormat.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE) } catch (_: Exception) { 2 * 1024 * 1024 }
+                } else {
+                    2 * 1024 * 1024
+                }
+                val bufSize = Math.max(2 * 1024 * 1024, maxVideoSize)
+                val videoBuf = ByteBuffer.allocateDirect(bufSize)
+                val audioBuf = ByteBuffer.allocateDirect(bufSize)
                 val videoInfo = MediaCodec.BufferInfo()
                 val audioInfo = MediaCodec.BufferInfo()
 
                 videoExtractor.selectTrack(videoTrackIn)
-                val hasAudio = (audioTrackIn >= 0 && audioTrackOut >= 0 && audioExtractor != null)
+                val hasAudio = (audioTrackIn >= 0 && audioTrackOut >= 0 && effectiveAudioExtractor != null)
                 if (hasAudio) {
-                    audioExtractor?.selectTrack(audioTrackIn)
+                    effectiveAudioExtractor!!.selectTrack(audioTrackIn)
                 }
 
                 var videoDone = false
@@ -431,27 +439,35 @@ class MainActivity : FlutterActivity() {
 
                 while (!videoDone || !audioDone) {
                     val vTime = if (!videoDone) videoExtractor.sampleTime else Long.MAX_VALUE
-                    val aTime = if (!audioDone && audioExtractor != null) audioExtractor.sampleTime else Long.MAX_VALUE
+                    val aTime = if (!audioDone && effectiveAudioExtractor != null) effectiveAudioExtractor.sampleTime else Long.MAX_VALUE
 
                     if (!videoDone && (audioDone || (vTime >= 0 && (aTime < 0 || vTime <= aTime)))) {
+                        videoBuf.clear()
+                        videoInfo.offset = 0
                         videoInfo.size = videoExtractor.readSampleData(videoBuf, 0)
                         if (videoInfo.size < 0) {
                             videoDone = true
                         } else {
                             videoInfo.presentationTimeUs = Math.max(0L, videoExtractor.sampleTime)
                             videoInfo.flags = videoExtractor.sampleFlags
+                            videoBuf.position(0)
+                            videoBuf.limit(videoInfo.size)
                             muxer.writeSampleData(videoTrackOut, videoBuf, videoInfo)
                             videoExtractor.advance()
                         }
-                    } else if (!audioDone && audioExtractor != null) {
-                        audioInfo.size = audioExtractor.readSampleData(audioBuf, 0)
+                    } else if (!audioDone && effectiveAudioExtractor != null) {
+                        audioBuf.clear()
+                        audioInfo.offset = 0
+                        audioInfo.size = effectiveAudioExtractor.readSampleData(audioBuf, 0)
                         if (audioInfo.size < 0) {
                             audioDone = true
                         } else {
-                            audioInfo.presentationTimeUs = Math.max(0L, audioExtractor.sampleTime)
-                            audioInfo.flags = audioExtractor.sampleFlags
+                            audioInfo.presentationTimeUs = Math.max(0L, effectiveAudioExtractor.sampleTime)
+                            audioInfo.flags = effectiveAudioExtractor.sampleFlags
+                            audioBuf.position(0)
+                            audioBuf.limit(audioInfo.size)
                             muxer.writeSampleData(audioTrackOut, audioBuf, audioInfo)
-                            audioExtractor.advance()
+                            effectiveAudioExtractor.advance()
                         }
                     } else {
                         break
@@ -482,7 +498,25 @@ class MainActivity : FlutterActivity() {
         val retriever = MediaMetadataRetriever()
         try {
             retriever.setDataSource(videoPath)
-            val frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            var frame: Bitmap? = null
+            try {
+                frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            } catch (_: Exception) {}
+            if (frame == null) {
+                try {
+                    frame = retriever.getFrameAtTime(-1L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                } catch (_: Exception) {}
+            }
+            if (frame == null) {
+                try {
+                    frame = retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST)
+                } catch (_: Exception) {}
+            }
+            if (frame == null) {
+                try {
+                    frame = retriever.frameAtTime
+                } catch (_: Exception) {}
+            }
             if (frame == null) {
                 result.error("thumbnail_failed", "no frame extracted", null)
                 return

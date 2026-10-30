@@ -357,9 +357,26 @@ class _PlayerScreenState extends State<PlayerScreen>
         s.contains('behind the live window');
   }
   Future<void> _handlePlaybackError(dynamic error) async {
-    final hasFb = (_currentFbVideoId != null && _currentFbVideoId!.isNotEmpty) ||
-        (_currentOriginalFbUrl != null && _currentOriginalFbUrl!.isNotEmpty);
-    if (hasFb && _isSignatureOrAuthError(error) && !_isAutoRefreshing) {
+    // If fbVideoId is missing, attempt to resolve it from history or URL
+    if ((_currentFbVideoId == null || _currentFbVideoId!.isEmpty) && widget.historyKey != null) {
+      try {
+        final entries = await HistoryService.instance.loadAll();
+        for (final e in entries) {
+          if (e.key == widget.historyKey) {
+            _currentFbVideoId ??= e.fbVideoId;
+            _currentOriginalFbUrl ??= e.originalFbUrl;
+            break;
+          }
+        }
+      } catch (_) {}
+    }
+
+    if ((_currentFbVideoId == null || _currentFbVideoId!.isEmpty) && _currentOriginalFbUrl != null) {
+      _currentFbVideoId = FacebookExtractorService.extractFacebookVideoId(_currentOriginalFbUrl!);
+    }
+
+    // If Facebook video ID exists and links expired or failed, automatically regenerate:
+    if (_currentFbVideoId != null && _currentFbVideoId!.isNotEmpty && !_isAutoRefreshing) {
       final success = await _attemptAutoRefreshFacebookStream();
       if (success) return;
     }
@@ -374,24 +391,44 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
   Future<bool> _attemptAutoRefreshFacebookStream() async {
     if (_isAutoRefreshing) return false;
+    final videoId = _currentFbVideoId ??
+        (_currentOriginalFbUrl != null
+            ? FacebookExtractorService.extractFacebookVideoId(_currentOriginalFbUrl!)
+            : null);
+    if (videoId == null || videoId.isEmpty) return false;
+
     _isAutoRefreshing = true;
     if (mounted) {
       setState(() {
         _isLoading = true;
         _errorMsg = null;
       });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              ),
+              SizedBox(width: 12),
+              Text('انتهت صلاحية الروابط، جاري التوليد من جديد...'),
+            ],
+          ),
+          duration: Duration(seconds: 3),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
     try {
-      final target = (_currentFbVideoId != null && _currentFbVideoId!.isNotEmpty)
-          ? _currentFbVideoId!
-          : _currentOriginalFbUrl!;
-      final result = await FacebookExtractorService.instance.extract(target);
+      final result = await FacebookExtractorService.instance.extract(videoId);
       _currentMpdContent = result.dashManifest;
       _currentFbVideoId = result.videoId;
       if (_historyKey != null) {
         await HistoryService.instance.updateMpd(_historyKey!, result.dashManifest);
       }
-      final rewrittenMpd = await CdnService.raceAndRewriteMpd(
+      final rewrittenMpd = CdnService.rewriteMpdContent(
         result.dashManifest,
         fbCdnEnabled: true,
       );
@@ -940,6 +977,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                       ..._representations.map((rep) => _QualityOption(
                             label: rep.qualityLabel,
                             sublabel: rep.bitrateLabel,
+                            badge: rep.resolutionType,
                             selected: _selectedRep?.id == rep.id,
                             onTap: () => _switchQuality(rep),
                           )),
@@ -1366,17 +1404,36 @@ class _PlayerScreenState extends State<PlayerScreen>
               overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 24),
-            OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.white,
-                side: const BorderSide(color: Colors.white30),
-              ),
-              icon: const Icon(LucideIcons.refreshCw, size: 16),
-              label: const Text('Retry'),
-              onPressed: () {
-                setState(() => _errorMsg = null);
-                _initPlayer(widget.videoPath, widget.isNetwork);
-              },
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Colors.white30),
+                  ),
+                  icon: const Icon(LucideIcons.refreshCw, size: 16),
+                  label: const Text('Retry'),
+                  onPressed: () {
+                    setState(() => _errorMsg = null);
+                    _initPlayer(widget.videoPath, widget.isNetwork);
+                  },
+                ),
+                if (_currentFbVideoId != null && _currentFbVideoId!.isNotEmpty) ...[
+                  const SizedBox(width: 12),
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF1877F2),
+                      foregroundColor: Colors.white,
+                    ),
+                    icon: const Icon(LucideIcons.sparkles, size: 16),
+                    label: const Text('تجديد الروابط'),
+                    onPressed: () {
+                      _attemptAutoRefreshFacebookStream();
+                    },
+                  ),
+                ],
+              ],
             ),
           ],
         ),
@@ -1478,13 +1535,47 @@ class _PlayerScreenState extends State<PlayerScreen>
             ),
           ),
           if (_representations.isNotEmpty)
-            TextButton.icon(
-              style: TextButton.styleFrom(foregroundColor: Colors.white),
-              icon: const Icon(LucideIcons.layers, size: 16),
-              label: Text(qualityLabel,
-                  style: const TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w600)),
+            TextButton(
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              ),
               onPressed: _showQualitySheet,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(LucideIcons.layers, size: 16),
+                  const SizedBox(width: 4),
+                  Text(
+                    qualityLabel,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (_selectedRep != null) ...[
+                    const SizedBox(width: 5),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: _selectedRep!.isHd
+                            ? const Color(0xFF1E88E5)
+                            : Colors.white24,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        _selectedRep!.resolutionType,
+                        style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
           if (widget.isDash)
             IconButton(
@@ -1950,11 +2041,13 @@ class _CircleButton extends StatelessWidget {
 class _QualityOption extends StatelessWidget {
   final String label;
   final String? sublabel;
+  final String? badge;
   final bool selected;
   final VoidCallback onTap;
   const _QualityOption({
     required this.label,
     required this.sublabel,
+    this.badge,
     required this.selected,
     required this.onTap,
   });
@@ -1968,12 +2061,37 @@ class _QualityOption extends StatelessWidget {
         color: selected ? scheme.primary : scheme.onSurfaceVariant,
         size: 20,
       ),
-      title: Text(
-        label,
-        style: TextStyle(
-          fontWeight: selected ? FontWeight.w700 : FontWeight.normal,
-          color: selected ? scheme.primary : scheme.onSurface,
-        ),
+      title: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontWeight: selected ? FontWeight.w700 : FontWeight.normal,
+              color: selected ? scheme.primary : scheme.onSurface,
+            ),
+          ),
+          if (badge != null) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: badge == 'HD'
+                    ? (selected ? scheme.primary : const Color(0xFF1E88E5))
+                    : scheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                badge!,
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: badge == 'HD' ? Colors.white : scheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
       subtitle: sublabel != null
           ? Text(sublabel!,
@@ -2194,10 +2312,7 @@ class _DownloadQualitySheetState extends State<_DownloadQualitySheet> {
   }
 
   String _getQualityBadge(DashRepresentation rep) {
-    if (rep.height >= 1080) return 'FHD';
-    if (rep.height >= 720) return 'HD';
-    if (rep.height > 0) return 'SD';
-    return 'MP4';
+    return rep.resolutionType;
   }
 
   @override

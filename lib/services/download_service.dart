@@ -315,9 +315,9 @@ class DownloadService {
       }
 
       final stamp = DateTime.now().microsecondsSinceEpoch;
-      final stagedVideoPath = '${tempDir.path}/${safeTitle}_v_$stamp.tmp';
+      final stagedVideoPath = '${tempDir.path}/${safeTitle}_v_$stamp.mp4';
       final stagedAudioPath =
-          audioUrl != null ? '${tempDir.path}/${safeTitle}_a_$stamp.tmp' : null;
+          audioUrl != null ? '${tempDir.path}/${safeTitle}_a_$stamp.m4a' : null;
 
       await NotificationService.showProgress(
           title: title, body: 'Downloading… 0%', progress: 0);
@@ -437,6 +437,7 @@ class DownloadService {
           filePath: outputPath,
           isDash: p.isDash,
           durationMs: p.durationMs,
+          initialThumbnailPath: thumbnailPath,
         );
         await NotificationService.showComplete(title, filePath: outputPath);
       } else {
@@ -481,8 +482,8 @@ class DownloadService {
   }
 
   static Future<Directory> _thumbnailsDirectory() async {
-    final root = await _publicPlyRoot();
-    final dir = Directory('$root/Ply/thumbnails');
+    final appDocs = await getApplicationDocumentsDirectory();
+    final dir = Directory('${appDocs.path}/Ply/thumbnails');
     if (!await dir.exists()) await dir.create(recursive: true);
     return dir;
   }
@@ -552,6 +553,7 @@ class DownloadService {
     required String filePath,
     required bool isDash,
     int? durationMs,
+    String? initialThumbnailPath,
   }) async {
     var resolvedDuration = durationMs ?? 0;
     if (resolvedDuration <= 0) {
@@ -567,14 +569,28 @@ class DownloadService {
     try {
       final thumbsDir = await _thumbnailsDirectory();
       final candidatePath = '${thumbsDir.path}/$id.jpg';
-      final ok = await _mediaChannel.invokeMethod<bool>('thumbnail', {
-            'videoPath': filePath,
-            'outputPath': candidatePath,
-            'timeUs': 1000000,
-          }) ??
-          false;
-      if (ok && await File(candidatePath).exists()) {
-        thumbnailPath = candidatePath;
+
+      if (initialThumbnailPath != null &&
+          initialThumbnailPath.isNotEmpty &&
+          await File(initialThumbnailPath).exists()) {
+        try {
+          await File(initialThumbnailPath).copy(candidatePath);
+          thumbnailPath = candidatePath;
+        } catch (_) {
+          thumbnailPath = initialThumbnailPath;
+        }
+      }
+
+      if (thumbnailPath == null || !await File(thumbnailPath).exists()) {
+        final ok = await _mediaChannel.invokeMethod<bool>('thumbnail', {
+              'videoPath': filePath,
+              'outputPath': candidatePath,
+              'timeUs': 1000000,
+            }) ??
+            false;
+        if (ok && await File(candidatePath).exists()) {
+          thumbnailPath = candidatePath;
+        }
       }
     } catch (_) {}
 
