@@ -1,3 +1,7 @@
+# SLF4J (used by MP4Parser)
+-dontwarn org.slf4j.**
+-keep class org.slf4j.** { *; }
+
 -keep class org.mp4parser.** { *; }
 -keepclassmembers class org.mp4parser.** { *; }
 -dontwarn org.mp4parser.**
@@ -9,3 +13,4 @@
 -dontwarn com.google.android.play.core.tasks.**
 -keep class io.flutter.embedding.engine.deferredcomponents.** { *; }
 -keep class io.flutter.embedding.android.FlutterPlayStoreSplitApplication { *; }
+
