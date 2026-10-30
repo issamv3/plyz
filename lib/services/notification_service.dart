@@ -61,6 +61,16 @@ class NotificationService {
     );
   }
 
+  static Future<bool?> requestPermission() async {
+    try {
+      final androidPlugin = _plugin.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      return await androidPlugin?.requestNotificationsPermission();
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Future<void> showProgress({
     required String title,
     required String body,
