@@ -156,7 +156,7 @@ class CdnService {
     bool fbCdnEnabled = true,
     String? preferredHost,
   }) {
-    if (!xmlContent.contains('fbcdn.net')) return xmlContent;
+    if (!fbCdnEnabled || !xmlContent.contains('fbcdn.net')) return xmlContent;
     final host = preferredHost ?? _activeFastestHost;
     return xmlContent.replaceAllMapped(
       RegExp(r'https?://[a-zA-Z0-9\-\.]*fbcdn\.net'),
@@ -169,7 +169,7 @@ class CdnService {
     bool fbCdnEnabled = true,
     bool force = true,
   }) async {
-    if (!xmlContent.contains('fbcdn.net')) return xmlContent;
+    if (!fbCdnEnabled || !xmlContent.contains('fbcdn.net')) return xmlContent;
 
     String? sampleUrl;
     final match =
@@ -192,7 +192,7 @@ class CdnService {
     bool fbCdnEnabled = true,
     String? preferredHost,
   }) {
-    if (!url.contains('fbcdn.net')) return url;
+    if (!fbCdnEnabled || !url.contains('fbcdn.net')) return url;
     try {
       final uri = Uri.parse(url);
       final host = preferredHost ?? _activeFastestHost;

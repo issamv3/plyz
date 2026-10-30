@@ -292,26 +292,28 @@ class DownloadService {
       String? audioUrl;
 
       if (p.isDash && p.mpdContent != null) {
-        final effectiveMpd = CdnService.rewriteMpdContent(
-          p.mpdContent!,
-          fbCdnEnabled: p.fbCdnEnabled,
-        );
+        final effectiveMpd = p.fbCdnEnabled
+            ? CdnService.rewriteMpdContent(
+                p.mpdContent!,
+                fbCdnEnabled: true,
+              )
+            : p.mpdContent!;
         final videoReps = DashParser.parse(effectiveMpd);
         final maybeVideoUrl = resolveVideoUrl(videoReps, p.selectedVideoRep);
         if (maybeVideoUrl == null) {
           await NotificationService.showError(title, 'No video track found');
           return;
         }
-        resolvedVideoUrl = maybeVideoUrl;
+        resolvedVideoUrl = maybeVideoUrl.replaceAll('&amp;', '&');
         final audioRep = DashParser.bestAudio(effectiveMpd);
         if (audioRep != null && audioRep.baseUrl != resolvedVideoUrl) {
-          audioUrl = audioRep.baseUrl;
+          audioUrl = audioRep.baseUrl.replaceAll('&amp;', '&');
         }
       } else {
         resolvedVideoUrl = CdnService.rewrite(
           p.videoPath,
           fbCdnEnabled: p.fbCdnEnabled,
-        );
+        ).replaceAll('&amp;', '&');
       }
 
       final stamp = DateTime.now().microsecondsSinceEpoch;

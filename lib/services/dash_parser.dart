@@ -184,11 +184,11 @@ class DashParser {
   static String _extractBaseUrl(XmlElement el) {
     final nodes = el.findElements('BaseURL');
     if (nodes.isNotEmpty && nodes.first.innerText.trim().isNotEmpty) {
-      return nodes.first.innerText.trim();
+      return nodes.first.innerText.trim().replaceAll('&amp;', '&');
     }
     final allBaseUrls = el.findAllElements('BaseURL');
     if (allBaseUrls.isNotEmpty && allBaseUrls.first.innerText.trim().isNotEmpty) {
-      return allBaseUrls.first.innerText.trim();
+      return allBaseUrls.first.innerText.trim().replaceAll('&amp;', '&');
     }
     return '';
   }

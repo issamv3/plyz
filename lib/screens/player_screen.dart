@@ -977,7 +977,6 @@ class _PlayerScreenState extends State<PlayerScreen>
                       ..._representations.map((rep) => _QualityOption(
                             label: rep.qualityLabel,
                             sublabel: rep.bitrateLabel,
-                            badge: rep.resolutionType,
                             selected: _selectedRep?.id == rep.id,
                             onTap: () => _switchQuality(rep),
                           )),
@@ -1553,27 +1552,6 @@ class _PlayerScreenState extends State<PlayerScreen>
                       fontWeight: FontWeight.w600,
                     ),
                   ),
-                  if (_selectedRep != null) ...[
-                    const SizedBox(width: 5),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 4, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: _selectedRep!.isHd
-                            ? const Color(0xFF1E88E5)
-                            : Colors.white24,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        _selectedRep!.resolutionType,
-                        style: const TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-                  ],
                 ],
               ),
             ),
@@ -2041,13 +2019,11 @@ class _CircleButton extends StatelessWidget {
 class _QualityOption extends StatelessWidget {
   final String label;
   final String? sublabel;
-  final String? badge;
   final bool selected;
   final VoidCallback onTap;
   const _QualityOption({
     required this.label,
     required this.sublabel,
-    this.badge,
     required this.selected,
     required this.onTap,
   });
@@ -2061,37 +2037,12 @@ class _QualityOption extends StatelessWidget {
         color: selected ? scheme.primary : scheme.onSurfaceVariant,
         size: 20,
       ),
-      title: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              fontWeight: selected ? FontWeight.w700 : FontWeight.normal,
-              color: selected ? scheme.primary : scheme.onSurface,
-            ),
-          ),
-          if (badge != null) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: badge == 'HD'
-                    ? (selected ? scheme.primary : const Color(0xFF1E88E5))
-                    : scheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                badge!,
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                  color: badge == 'HD' ? Colors.white : scheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-          ],
-        ],
+      title: Text(
+        label,
+        style: TextStyle(
+          fontWeight: selected ? FontWeight.w700 : FontWeight.normal,
+          color: selected ? scheme.primary : scheme.onSurface,
+        ),
       ),
       subtitle: sublabel != null
           ? Text(sublabel!,
@@ -2311,10 +2262,6 @@ class _DownloadQualitySheetState extends State<_DownloadQualitySheet> {
     }
   }
 
-  String _getQualityBadge(DashRepresentation rep) {
-    return rep.resolutionType;
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -2473,7 +2420,6 @@ class _DownloadQualitySheetState extends State<_DownloadQualitySheet> {
                             scheme: scheme,
                             label: 'Original Quality',
                             sublabel: widget.durationMs != null ? 'Full stream' : null,
-                            badge: 'Original',
                             sizeEstimate: '',
                             isSelected: true,
                             isBest: true,
@@ -2486,7 +2432,6 @@ class _DownloadQualitySheetState extends State<_DownloadQualitySheet> {
                             final isSelected = _selectedRep?.id == rep.id ||
                                 (_selectedRep == null && idx == 0);
                             final sizeEstimate = _formatEstimatedSize(rep.bandwidth);
-                            final badge = _getQualityBadge(rep);
                             final isBest = idx == 0;
 
                             return Padding(
@@ -2495,7 +2440,6 @@ class _DownloadQualitySheetState extends State<_DownloadQualitySheet> {
                                 scheme: scheme,
                                 label: rep.qualityLabel,
                                 sublabel: rep.bitrateLabel,
-                                badge: badge,
                                 sizeEstimate: sizeEstimate,
                                 isSelected: isSelected,
                                 isBest: isBest,
@@ -2552,7 +2496,6 @@ class _DownloadQualitySheetState extends State<_DownloadQualitySheet> {
     required ColorScheme scheme,
     required String label,
     required String? sublabel,
-    required String badge,
     required String sizeEstimate,
     required bool isSelected,
     required bool isBest,
@@ -2584,24 +2527,6 @@ class _DownloadQualitySheetState extends State<_DownloadQualitySheet> {
               size: 20,
             ),
             const SizedBox(width: 12),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-              decoration: BoxDecoration(
-                color: isSelected
-                    ? scheme.primary
-                    : scheme.onSurfaceVariant.withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text(
-                badge,
-                style: TextStyle(
-                  color: isSelected ? scheme.onPrimary : scheme.onSurface,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,

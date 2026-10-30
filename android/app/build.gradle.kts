@@ -46,6 +46,8 @@ kotlin {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    implementation("org.mp4parser:isoparser:1.9.41")
+    implementation("org.mp4parser:muxer:1.9.41")
 }
 
 flutter {
