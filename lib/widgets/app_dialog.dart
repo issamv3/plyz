@@ -347,4 +347,87 @@ class AppDialog extends StatelessWidget {
       ),
     );
   }
+
+  static Future<void> showDetails(
+    BuildContext context, {
+    IconData? icon = LucideIcons.alertCircle,
+    Color? iconColor,
+    Color? iconBgColor,
+    required String title,
+    required String message,
+    required String details,
+    String buttonLabel = 'Close',
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    final effIconColor = iconColor ?? scheme.error;
+    final effIconBg = iconBgColor ?? scheme.errorContainer.withOpacity(0.5);
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) => AppDialog(
+        icon: icon != null
+            ? Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: effIconBg,
+                  shape: BoxShape.circle,
+                ),
+                child: Center(
+                  child: Icon(
+                    icon,
+                    color: effIconColor,
+                    size: 24,
+                  ),
+                ),
+              )
+            : null,
+        title: title,
+        message: message,
+        content: Container(
+          constraints: const BoxConstraints(maxHeight: 240),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHighest.withOpacity(0.6),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: scheme.outlineVariant.withOpacity(0.35),
+            ),
+          ),
+          child: SingleChildScrollView(
+            child: SelectableText(
+              details,
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 11,
+                height: 1.4,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ),
+        actions: [
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: scheme.primary,
+              foregroundColor: scheme.onPrimary,
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              minimumSize: const Size.fromHeight(44),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+              elevation: 0,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text(
+              buttonLabel,
+              style: const TextStyle(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
+

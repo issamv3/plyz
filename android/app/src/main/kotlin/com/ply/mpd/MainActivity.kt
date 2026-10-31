@@ -11,6 +11,7 @@ import android.media.MediaMuxer
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.view.KeyEvent
+import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
@@ -29,6 +30,7 @@ class MainActivity : FlutterActivity() {
         channel!!.setMethodCallHandler { call, result ->
             when (call.method) {
                 "mux" -> handleMux(call, result)
+                "probe" -> handleProbe(call, result)
                 "thumbnail" -> handleThumbnail(call, result)
                 "getInitialIntent" -> handleGetInitialIntent(result)
                 "readTextUri" -> handleReadTextUri(call, result)
@@ -361,6 +363,50 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun handleProbe(call: MethodCall, result: MethodChannel.Result) {
+        val path = call.argument<String>("path")
+        if (path == null) {
+            result.error("bad_args", "path required", null)
+            return
+        }
+        Thread {
+            val extractor = MediaExtractor()
+            try {
+                extractor.setDataSource(path)
+                val trackCount = extractor.trackCount
+                val tracks = ArrayList<Map<String, Any>>()
+                for (i in 0 until trackCount) {
+                    val fmt = extractor.getTrackFormat(i)
+                    val mime = fmt.getString(MediaFormat.KEY_MIME) ?: ""
+                    val durationUs = if (fmt.containsKey(MediaFormat.KEY_DURATION)) {
+                        fmt.getLong(MediaFormat.KEY_DURATION)
+                    } else 0L
+                    val width = if (fmt.containsKey(MediaFormat.KEY_WIDTH)) {
+                        fmt.getInteger(MediaFormat.KEY_WIDTH)
+                    } else 0
+                    val height = if (fmt.containsKey(MediaFormat.KEY_HEIGHT)) {
+                        fmt.getInteger(MediaFormat.KEY_HEIGHT)
+                    } else 0
+                    val trackMap = hashMapOf<String, Any>(
+                        "index" to i,
+                        "mime" to mime,
+                        "durationUs" to durationUs,
+                        "width" to width,
+                        "height" to height
+                    )
+                    tracks.add(trackMap)
+                }
+                Log.d("PlyMux", "probe: path=$path, tracks=$tracks")
+                activity?.runOnUiThread { result.success(tracks) }
+            } catch (e: Exception) {
+                Log.e("PlyMux", "probe failed for path=$path: ${e.message}", e)
+                activity?.runOnUiThread { result.error("probe_failed", e.message, null) }
+            } finally {
+                try { extractor.release() } catch (_: Exception) {}
+            }
+        }.start()
+    }
+
     private fun handleMux(call: MethodCall, result: MethodChannel.Result) {
         val videoPath = call.argument<String>("videoPath")
         val audioPath = call.argument<String>("audioPath")
@@ -369,6 +415,8 @@ class MainActivity : FlutterActivity() {
             result.error("bad_args", "videoPath/outputPath required", null)
             return
         }
+
+        Log.d("PlyMux", "handleMux start: videoPath=$videoPath, audioPath=$audioPath, outputPath=$outputPath")
 
         Thread {
             var muxer: MediaMuxer? = null
@@ -384,6 +432,7 @@ class MainActivity : FlutterActivity() {
                 videoExtractor.setDataSource(videoPath)
                 var videoTrackIn = -1
                 var videoFormat: MediaFormat? = null
+                var videoMime: String? = null
 
                 for (i in 0 until videoExtractor.trackCount) {
                     val fmt = videoExtractor.getTrackFormat(i)
@@ -391,22 +440,29 @@ class MainActivity : FlutterActivity() {
                     if (mime.startsWith("video/")) {
                         videoTrackIn = i
                         videoFormat = fmt
+                        videoMime = mime
                         break
                     }
                 }
 
+                Log.d("PlyMux", "Video track index=$videoTrackIn, mime=$videoMime")
+
                 if (videoTrackIn < 0 || videoFormat == null) {
-                    if (File(videoPath).exists() && File(videoPath).length() > 0L) {
-                        File(videoPath).copyTo(outFile, overwrite = true)
-                        activity?.runOnUiThread { result.success(true) }
-                    } else {
-                        activity?.runOnUiThread { result.error("mux_failed", "No video track found", null) }
+                    Log.e("PlyMux", "No video track found in $videoPath")
+                    activity?.runOnUiThread {
+                        result.success(hashMapOf(
+                            "ok" to false,
+                            "hasVideo" to false,
+                            "hasAudio" to false,
+                            "error" to "No video track found in input file"
+                        ))
                     }
                     return@Thread
                 }
 
                 var audioTrackIn = -1
                 var audioFormat: MediaFormat? = null
+                var audioMime: String? = null
                 if (audioExtractor != null && audioPath != null) {
                     try {
                         audioExtractor.setDataSource(audioPath)
@@ -416,23 +472,31 @@ class MainActivity : FlutterActivity() {
                             if (mime.startsWith("audio/")) {
                                 audioTrackIn = i
                                 audioFormat = fmt
+                                audioMime = mime
                                 break
                             }
                         }
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) {
+                        Log.w("PlyMux", "Failed reading audio track from $audioPath: ${e.message}")
+                    }
                 }
 
+                Log.d("PlyMux", "Audio track index=$audioTrackIn, mime=$audioMime")
+
                 muxer = MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                Log.d("PlyMux", "Adding video track to MediaMuxer ($videoMime)")
                 val videoTrackOut = muxer.addTrack(videoFormat)
-                val audioTrackOut = if (audioTrackIn >= 0 && audioFormat != null) {
-                    try {
-                        muxer.addTrack(audioFormat)
-                    } catch (_: Exception) {
-                        -1
-                    }
-                } else -1
+                Log.d("PlyMux", "Video track added to MediaMuxer: outIndex=$videoTrackOut")
+
+                var audioTrackOut = -1
+                if (audioTrackIn >= 0 && audioFormat != null) {
+                    Log.d("PlyMux", "Adding audio track to MediaMuxer ($audioMime)")
+                    audioTrackOut = muxer.addTrack(audioFormat)
+                    Log.d("PlyMux", "Audio track added to MediaMuxer: outIndex=$audioTrackOut")
+                }
 
                 muxer.start()
+                Log.d("PlyMux", "MediaMuxer started successfully")
 
                 val bufSize = 2 * 1024 * 1024
                 val buf = ByteBuffer.allocateDirect(bufSize)
@@ -440,6 +504,7 @@ class MainActivity : FlutterActivity() {
 
                 // 1. Write video samples
                 videoExtractor.selectTrack(videoTrackIn)
+                var videoSamples = 0
                 while (true) {
                     buf.clear()
                     val sampleSize = videoExtractor.readSampleData(buf, 0)
@@ -450,9 +515,12 @@ class MainActivity : FlutterActivity() {
                     info.flags = videoExtractor.sampleFlags
                     muxer.writeSampleData(videoTrackOut, buf, info)
                     videoExtractor.advance()
+                    videoSamples++
                 }
+                Log.d("PlyMux", "Wrote $videoSamples video samples to MediaMuxer")
 
                 // 2. Write audio samples if available
+                var audioSamples = 0
                 if (audioTrackIn >= 0 && audioTrackOut >= 0 && audioExtractor != null) {
                     audioExtractor.selectTrack(audioTrackIn)
                     while (true) {
@@ -465,28 +533,39 @@ class MainActivity : FlutterActivity() {
                         info.flags = audioExtractor.sampleFlags
                         muxer.writeSampleData(audioTrackOut, buf, info)
                         audioExtractor.advance()
+                        audioSamples++
                     }
+                    Log.d("PlyMux", "Wrote $audioSamples audio samples to MediaMuxer")
                 }
 
                 muxer.stop()
+                Log.d("PlyMux", "MediaMuxer stopped. Output file exists=${outFile.exists()}, size=${outFile.length()}")
 
-                if (outFile.exists() && outFile.length() > 0L) {
-                    activity?.runOnUiThread { result.success(true) }
-                } else {
-                    File(videoPath).copyTo(outFile, overwrite = true)
-                    activity?.runOnUiThread { result.success(true) }
+                val hasVideo = outFile.exists() && outFile.length() > 0L
+                val hasAudio = hasVideo && (audioTrackOut >= 0 && audioSamples > 0)
+
+                activity?.runOnUiThread {
+                    result.success(hashMapOf(
+                        "ok" to true,
+                        "hasVideo" to hasVideo,
+                        "hasAudio" to hasAudio,
+                        "error" to null
+                    ))
                 }
             } catch (t: Throwable) {
+                Log.e("PlyMux", "MediaMuxer exception: ${t.message}", t)
                 try {
-                    if (!outFile.exists() || outFile.length() == 0L) {
-                        if (File(videoPath).exists() && File(videoPath).length() > 0L) {
-                            File(videoPath).copyTo(outFile, overwrite = true)
-                            activity?.runOnUiThread { result.success(true) }
-                            return@Thread
-                        }
-                    }
+                    if (outFile.exists()) outFile.delete()
                 } catch (_: Exception) {}
-                activity?.runOnUiThread { result.error("mux_failed", t.message ?: "Mux error", null) }
+
+                activity?.runOnUiThread {
+                    result.success(hashMapOf(
+                        "ok" to false,
+                        "hasVideo" to false,
+                        "hasAudio" to false,
+                        "error" to (t.message ?: t.toString())
+                    ))
+                }
             } finally {
                 try { muxer?.release() } catch (_: Exception) {}
                 try { videoExtractor.release() } catch (_: Exception) {}

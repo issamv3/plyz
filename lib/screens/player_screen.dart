@@ -698,8 +698,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (!mounted) return;
     setState(() => _downloading = true);
     final l10n = AppLocalizations.of(context);
-    final qualityText = selectedRep?.qualityLabel.isNotEmpty == true
-        ? ' (${selectedRep!.qualityLabel})'
+    final qualityText = selectedRep?.cleanQualityLabel.isNotEmpty == true
+        ? ' (${selectedRep!.cleanQualityLabel})'
         : '';
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -975,7 +975,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                         onTap: () => _switchQuality(null),
                       ),
                       ..._representations.map((rep) => _QualityOption(
-                            label: rep.qualityLabel,
+                            label: rep.cleanQualityLabel,
                             sublabel: rep.bitrateLabel,
                             selected: _selectedRep?.id == rep.id,
                             onTap: () => _switchQuality(rep),
@@ -1500,7 +1500,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
   Widget _buildTopBar(ColorScheme scheme) {
-    final qualityLabel = _selectedRep?.qualityLabel ??
+    final qualityLabel = _selectedRep?.cleanQualityLabel ??
         (AppLocalizations.of(context).auto.split(' ').first);
     return Container(
       decoration: const BoxDecoration(
@@ -2268,9 +2268,9 @@ class _DownloadQualitySheetState extends State<_DownloadQualitySheet> {
     final scheme = theme.colorScheme;
     final l10n = AppLocalizations.of(context);
 
-    final selectedLabel = _selectedRep?.qualityLabel ??
+    final selectedLabel = _selectedRep?.cleanQualityLabel ??
         (widget.representations.isNotEmpty
-            ? widget.representations.first.qualityLabel
+            ? widget.representations.first.cleanQualityLabel
             : 'Original');
 
     return Container(
@@ -2438,7 +2438,7 @@ class _DownloadQualitySheetState extends State<_DownloadQualitySheet> {
                               padding: const EdgeInsets.only(bottom: 8),
                               child: _buildQualityCard(
                                 scheme: scheme,
-                                label: rep.qualityLabel,
+                                label: rep.cleanQualityLabel,
                                 sublabel: rep.bitrateLabel,
                                 sizeEstimate: sizeEstimate,
                                 isSelected: isSelected,

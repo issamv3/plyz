@@ -4,12 +4,38 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:ffmpeg_kit_flutter_new_min/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_flutter_new_min/return_code.dart';
 import '../models/dash_representation.dart';
 import '../models/download_record.dart';
 import 'cdn_service.dart';
 import 'dash_parser.dart';
 import 'download_library_service.dart';
 import 'notification_service.dart';
+
+enum DownloadEventType {
+  success,
+  warning,
+  error,
+}
+
+class DownloadEvent {
+  final String id;
+  final String title;
+  final DownloadEventType type;
+  final String message;
+  final String? details;
+  final DateTime timestamp;
+
+  DownloadEvent({
+    required this.id,
+    required this.title,
+    required this.type,
+    required this.message,
+    this.details,
+    DateTime? timestamp,
+  }) : timestamp = timestamp ?? DateTime.now();
+}
 
 class DownloadTask {
   final String id;
@@ -20,6 +46,9 @@ class DownloadTask {
   final String? thumbnailPath;
   final bool isPaused;
   final bool isQueued;
+  final bool isFailed;
+  final String? errorReason;
+  final String? errorDetails;
 
   const DownloadTask({
     required this.id,
@@ -30,6 +59,9 @@ class DownloadTask {
     this.thumbnailPath,
     this.isPaused = false,
     this.isQueued = false,
+    this.isFailed = false,
+    this.errorReason,
+    this.errorDetails,
   });
 }
 
@@ -77,7 +109,23 @@ class DownloadService {
   static final ValueNotifier<List<DownloadTask>> actives =
       ValueNotifier<List<DownloadTask>>([]);
 
+  static final ValueNotifier<DownloadEvent?> downloadEvents =
+      ValueNotifier<DownloadEvent?>(null);
+
   static Future<void> init() async {}
+
+  static Future<List<Map<String, dynamic>>> probe(String path) async {
+    try {
+      final res = await _mediaChannel.invokeListMethod<dynamic>('probe', {'path': path});
+      if (res == null) return [];
+      return res
+          .map((item) => item is Map ? Map<String, dynamic>.from(item) : <String, dynamic>{})
+          .toList();
+    } catch (e) {
+      debugPrint('[PlyMux] probe failed for $path: $e');
+      return [];
+    }
+  }
 
   static void _rebuildActives() {
     final list = <DownloadTask>[
@@ -227,7 +275,7 @@ class DownloadService {
     final stagedFiles = <File>[];
     final id = p.id;
     final title = p.title;
-    final thumbnailPath = p.thumbnailPath;
+    final initialThumbnailPath = p.thumbnailPath;
 
     void updateTask(DownloadTask t) {
       _taskMap[id] = t;
@@ -271,7 +319,7 @@ class DownloadService {
             title: title,
             progress: 90,
             status: 'Saving…',
-            thumbnailPath: thumbnailPath));
+            thumbnailPath: initialThumbnailPath));
         await NotificationService.showProgress(
             title: title, body: 'Saving…', progress: 90);
         await File(p.videoPath).copy(outputPath);
@@ -281,9 +329,15 @@ class DownloadService {
           filePath: outputPath,
           isDash: p.isDash,
           durationMs: p.durationMs,
-          initialThumbnailPath: thumbnailPath,
+          initialThumbnailPath: initialThumbnailPath,
         );
         await NotificationService.showComplete(title, filePath: outputPath);
+        downloadEvents.value = DownloadEvent(
+          id: id,
+          title: title,
+          type: DownloadEventType.success,
+          message: 'Saved to downloads',
+        );
         return;
       }
 
@@ -297,8 +351,7 @@ class DownloadService {
         final videoReps = DashParser.parse(effectiveMpd);
         final maybeVideoUrl = resolveVideoUrl(videoReps, p.selectedVideoRep);
         if (maybeVideoUrl == null) {
-          await NotificationService.showError(title, 'No video track found');
-          return;
+          throw Exception('No video track found in DASH manifest');
         }
         resolvedVideoUrl = maybeVideoUrl.replaceAll('&amp;', '&');
         final audioRep = DashParser.bestAudio(effectiveMpd);
@@ -316,7 +369,6 @@ class DownloadService {
       }
 
       final stamp = DateTime.now().microsecondsSinceEpoch;
-      // Use .mp4 extensions so Android native extractors recognize media format instantly
       final stagedVideoPath = '${tempDir.path}/${safeTitle}_v_$stamp.mp4';
       final stagedAudioPath =
           audioUrl != null ? '${tempDir.path}/${safeTitle}_a_$stamp.mp4' : null;
@@ -345,7 +397,7 @@ class DownloadService {
               progress: pct,
               status: 'Downloading…',
               speedBps: speedBps,
-              thumbnailPath: thumbnailPath,
+              thumbnailPath: initialThumbnailPath,
               isPaused: job.pauseRequested,
             ));
             unawaited(NotificationService.showProgress(
@@ -355,7 +407,7 @@ class DownloadService {
       );
       stagedFiles.add(File(stagedVideoPath));
 
-      // 2. Download Audio stream (if separate)
+      // 2. Download Audio stream (if present in manifest)
       if (audioUrl != null && stagedAudioPath != null) {
         await _downloadToFile(
           audioUrl,
@@ -373,9 +425,9 @@ class DownloadService {
                 id: id,
                 title: title,
                 progress: pct,
-                status: 'Downloading…',
+                status: 'Downloading audio…',
                 speedBps: speedBps,
-                thumbnailPath: thumbnailPath,
+                thumbnailPath: initialThumbnailPath,
                 isPaused: job.pauseRequested,
               ));
               unawaited(NotificationService.showProgress(
@@ -388,13 +440,13 @@ class DownloadService {
 
       if (job.cancelRequested) throw const _CancelException();
 
-      // 3. Merge Video and Audio
+      // 3. Merging
       updateTask(DownloadTask(
           id: id,
           title: title,
           progress: 90,
-          status: 'Merging…',
-          thumbnailPath: thumbnailPath));
+          status: 'Merging audio and video…',
+          thumbnailPath: initialThumbnailPath));
       await NotificationService.showProgress(
           title: title, body: 'Merging…', progress: 90);
 
@@ -402,7 +454,7 @@ class DownloadService {
       String? muxError;
 
       if (audioUrl == null || stagedAudioPath == null) {
-        // Direct stream or single stream: copy directly
+        // Direct stream or single stream: copy directly to output
         try {
           await File(stagedVideoPath).copy(outputPath);
           muxed = true;
@@ -410,31 +462,102 @@ class DownloadService {
           muxError = e.toString();
         }
       } else {
-        try {
-          muxed = await _mediaChannel.invokeMethod<bool>('mux', {
-                'videoPath': stagedVideoPath,
-                'audioPath': stagedAudioPath,
-                'outputPath': outputPath,
-              }) ??
-              false;
-        } on PlatformException catch (e) {
-          muxError = e.message ?? e.code;
-        } catch (e) {
-          muxError = e.toString();
+        // Probe audio track before muxing to ensure audio is valid
+        final audioTracks = await probe(stagedAudioPath);
+        final hasAudioTrack = audioTracks.any((t) {
+          final mime = (t['mime'] as String? ?? '').toLowerCase();
+          return mime.startsWith('audio/');
+        });
+
+        if (!hasAudioTrack) {
+          throw Exception(
+              'Downloaded audio file has no recognized audio track. Streams: $audioTracks');
         }
 
-        // If native muxing fails, ensure user does not lose video
-        if (!muxed || !await File(outputPath).exists() || await File(outputPath).length() == 0) {
+        // Probe video track to check video codec
+        final videoTracks = await probe(stagedVideoPath);
+        final videoTrack = videoTracks.firstWhere(
+          (t) => (t['mime'] as String? ?? '').toLowerCase().startsWith('video/'),
+          orElse: () => <String, dynamic>{},
+        );
+        final videoMime = (videoTrack['mime'] as String? ?? '').toLowerCase();
+        debugPrint('[PlyMux] Probed videoMime=$videoMime, audioTracks=$audioTracks');
+
+        // If AVC or HEVC, try native MediaMuxer
+        if (videoMime == 'video/avc' || videoMime == 'video/hevc') {
           try {
-            await File(stagedVideoPath).copy(outputPath);
-            muxed = true;
-          } catch (_) {}
+            final res = await _mediaChannel.invokeMapMethod<String, dynamic>('mux', {
+              'videoPath': stagedVideoPath,
+              'audioPath': stagedAudioPath,
+              'outputPath': outputPath,
+            });
+            if (res != null &&
+                res['ok'] == true &&
+                res['hasVideo'] == true &&
+                res['hasAudio'] == true &&
+                await File(outputPath).exists()) {
+              muxed = true;
+            } else {
+              muxError = res?['error']?.toString();
+            }
+          } catch (e) {
+            muxError = e.toString();
+          }
+        }
+
+        // If VP9, AV1, or native muxer failed: use FFmpeg lossless remux
+        if (!muxed) {
+          debugPrint('[PlyMux] Using FFmpegKit lossless remux for $videoMime');
+          try {
+            final ffmpegCmd =
+                '-y -i "$stagedVideoPath" -i "$stagedAudioPath" -map 0:v:0 -map 1:a:0 -c copy -movflags +faststart "$outputPath"';
+            final session = await FFmpegKit.execute(ffmpegCmd);
+            final returnCode = await session.getReturnCode();
+            if (ReturnCode.isSuccess(returnCode) &&
+                await File(outputPath).exists() &&
+                await File(outputPath).length() > 0) {
+              muxed = true;
+            } else {
+              final logs = await session.getAllLogsAsString();
+              final failStack = await session.getFailStackTrace();
+              muxError = 'FFmpeg error (code: $returnCode):\n$logs\n$failStack';
+              debugPrint('[PlyMux] FFmpeg remux failed: $muxError');
+            }
+          } catch (e) {
+            muxError = 'FFmpeg execution exception: $e';
+          }
+        }
+
+        // 4. Verification: Probe output to guarantee audio and video are present
+        if (muxed && await File(outputPath).exists()) {
+          final outTracks = await probe(outputPath);
+          final outHasVideo = outTracks.any((t) =>
+              (t['mime'] as String? ?? '').toLowerCase().startsWith('video/'));
+          final outHasAudio = outTracks.any((t) =>
+              (t['mime'] as String? ?? '').toLowerCase().startsWith('audio/'));
+
+          if (!outHasVideo) {
+            muxed = false;
+            muxError = 'Output video file is missing video track ($outTracks)';
+          } else if (!outHasAudio) {
+            // NEVER silently save a video without audio when the manifest had audio!
+            muxed = false;
+            muxError =
+                'Audio track missing from output file. Expected audio from $audioUrl.';
+            try {
+              if (await outFile.exists()) await outFile.delete();
+            } catch (_) {}
+          }
         }
       }
 
-      if (muxed && await File(outputPath).exists()) {
+      if (muxed && await File(outputPath).exists() && await File(outputPath).length() > 0) {
         updateTask(DownloadTask(
-            id: id, title: title, progress: 98, status: 'Saving…'));
+            id: id,
+            title: title,
+            progress: 98,
+            status: 'Saving…',
+            thumbnailPath: initialThumbnailPath));
         await NotificationService.showProgress(
             title: title, body: 'Saving…', progress: 98);
 
@@ -444,22 +567,65 @@ class DownloadService {
           filePath: outputPath,
           isDash: p.isDash,
           durationMs: p.durationMs,
-          initialThumbnailPath: thumbnailPath,
+          initialThumbnailPath: initialThumbnailPath,
         );
 
         await NotificationService.showComplete(title, filePath: outputPath);
+
+        downloadEvents.value = DownloadEvent(
+          id: id,
+          title: title,
+          type: DownloadEventType.success,
+          message: 'Video downloaded successfully with audio',
+        );
       } else {
         try {
-          await outFile.delete();
+          if (await outFile.exists()) await outFile.delete();
         } catch (_) {}
-        await NotificationService.showError(title, muxError ?? 'Download failed');
+        final reason = muxError ?? 'Merging audio and video failed';
+        updateTask(DownloadTask(
+          id: id,
+          title: title,
+          progress: 0,
+          status: 'Failed',
+          isFailed: true,
+          errorReason: reason,
+          errorDetails: muxError,
+          thumbnailPath: initialThumbnailPath,
+        ));
+        await NotificationService.showError(title, reason);
+        downloadEvents.value = DownloadEvent(
+          id: id,
+          title: title,
+          type: DownloadEventType.error,
+          message: 'Download failed: audio could not be merged',
+          details: reason,
+        );
       }
     } on _CancelException {
       try {
         await NotificationService.cancel();
       } catch (_) {}
-    } catch (e) {
-      await NotificationService.showError(title, e.toString());
+    } catch (e, st) {
+      final reason = e.toString().replaceFirst('Exception: ', '');
+      updateTask(DownloadTask(
+        id: id,
+        title: title,
+        progress: 0,
+        status: 'Failed',
+        isFailed: true,
+        errorReason: reason,
+        errorDetails: '$e\n$st',
+        thumbnailPath: initialThumbnailPath,
+      ));
+      await NotificationService.showError(title, reason);
+      downloadEvents.value = DownloadEvent(
+        id: id,
+        title: title,
+        type: DownloadEventType.error,
+        message: reason,
+        details: '$e\n$st',
+      );
     } finally {
       for (final f in stagedFiles) {
         try {
@@ -496,6 +662,51 @@ class DownloadService {
     return dir;
   }
 
+  static Future<String?> extractThumbnail(
+      String videoPath, String candidatePath) async {
+    // 1. Try native MediaMetadataRetriever
+    try {
+      final ok = await _mediaChannel.invokeMethod<bool>('thumbnail', {
+            'videoPath': videoPath,
+            'outputPath': candidatePath,
+            'timeUs': 1000000,
+          }) ??
+          false;
+      if (ok &&
+          await File(candidatePath).exists() &&
+          await File(candidatePath).length() > 0) {
+        return candidatePath;
+      }
+    } catch (_) {}
+
+    // 2. FFmpeg frame extraction fallback (supports VP9, AV1, HEVC, AVC, MKV, etc.)
+    try {
+      final cmd =
+          '-y -ss 0.5 -i "$videoPath" -vframes 1 -vf "scale=400:-2" "$candidatePath"';
+      final session = await FFmpegKit.execute(cmd);
+      final rc = await session.getReturnCode();
+      if (ReturnCode.isSuccess(rc) &&
+          await File(candidatePath).exists() &&
+          await File(candidatePath).length() > 0) {
+        return candidatePath;
+      }
+    } catch (_) {}
+
+    try {
+      final cmd0 =
+          '-y -i "$videoPath" -vframes 1 -vf "scale=400:-2" "$candidatePath"';
+      final session0 = await FFmpegKit.execute(cmd0);
+      final rc0 = await session0.getReturnCode();
+      if (ReturnCode.isSuccess(rc0) &&
+          await File(candidatePath).exists() &&
+          await File(candidatePath).length() > 0) {
+        return candidatePath;
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
   static Future<void> syncWithPublicFolder() async {
     try {
       final dir = await _downloadsDirectory();
@@ -520,27 +731,16 @@ class DownloadService {
             name.contains('.') ? name.substring(0, name.lastIndexOf('.')) : name;
         final id = 'scan_${file.path.hashCode.abs()}';
 
-        String? thumbnailPath;
-        try {
-          final thumbsDir = await _thumbnailsDirectory();
-          final candidatePath = '${thumbsDir.path}/$id.jpg';
-          final ok = await _mediaChannel.invokeMethod<bool>('thumbnail', {
-                'videoPath': file.path,
-                'outputPath': candidatePath,
-                'timeUs': 1000000,
-              }) ??
-              false;
-          if (ok && await File(candidatePath).exists()) {
-            thumbnailPath = candidatePath;
-          }
-        } catch (_) {}
+        final thumbsDir = await _thumbnailsDirectory();
+        final candidatePath = '${thumbsDir.path}/$id.jpg';
+        final thumb = await extractThumbnail(file.path, candidatePath);
 
         await DownloadLibraryService.instance.add(DownloadRecord(
           id: id,
           title: title,
           filePath: file.path,
           durationMs: 0,
-          thumbnailPath: thumbnailPath,
+          thumbnailPath: thumb,
           isDash: false,
           downloadedAtMs: file.statSync().modified.millisecondsSinceEpoch,
         ));
@@ -575,15 +775,7 @@ class DownloadService {
       }
 
       if (thumbnailPath == null || !await File(thumbnailPath).exists()) {
-        final ok = await _mediaChannel.invokeMethod<bool>('thumbnail', {
-              'videoPath': filePath,
-              'outputPath': candidatePath,
-              'timeUs': 1000000,
-            }) ??
-            false;
-        if (ok && await File(candidatePath).exists()) {
-          thumbnailPath = candidatePath;
-        }
+        thumbnailPath = await extractThumbnail(filePath, candidatePath);
       }
     } catch (_) {}
 
@@ -611,38 +803,57 @@ class DownloadService {
       request.headers.addAll(headers);
       final response = await client.send(request);
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw Exception('HTTP ${response.statusCode} for $url');
+        throw Exception('HTTP ${response.statusCode} while downloading');
       }
+
+      final contentType = (response.headers['content-type'] ?? '').toLowerCase();
+      if (contentType.contains('text/html') || contentType.contains('application/json')) {
+        throw Exception(
+            'Received $contentType instead of media. Stream link may have expired.');
+      }
+
       final total = response.contentLength;
-      final sink = File(path).openWrite();
+      final file = File(path);
+      if (await file.exists()) await file.delete();
+      final sink = file.openWrite();
       var received = 0;
       var speedBps = 0;
       var lastSpeedReceived = 0;
       var lastSpeedTime = DateTime.now();
 
-      await for (final chunk in response.stream) {
-        if (job.cancelRequested) throw const _CancelException();
-        if (job.pauseRequested) {
-          job.pauseCompleter = Completer<void>();
-          await job.pauseCompleter!.future;
+      try {
+        await for (final chunk in response.stream) {
           if (job.cancelRequested) throw const _CancelException();
-        }
-        sink.add(chunk);
-        received += chunk.length;
+          if (job.pauseRequested) {
+            job.pauseCompleter = Completer<void>();
+            await job.pauseCompleter!.future;
+            if (job.cancelRequested) throw const _CancelException();
+          }
+          sink.add(chunk);
+          received += chunk.length;
 
-        final now = DateTime.now();
-        final elapsed = now.difference(lastSpeedTime).inMilliseconds;
-        if (elapsed >= 500) {
-          speedBps =
-              ((received - lastSpeedReceived) * 1000 / elapsed).round();
-          lastSpeedReceived = received;
-          lastSpeedTime = now;
-        }
+          final now = DateTime.now();
+          final elapsed = now.difference(lastSpeedTime).inMilliseconds;
+          if (elapsed >= 500) {
+            speedBps =
+                ((received - lastSpeedReceived) * 1000 / elapsed).round();
+            lastSpeedReceived = received;
+            lastSpeedTime = now;
+          }
 
-        onProgress(received, total, speedBps);
+          onProgress(received, total, speedBps);
+        }
+      } finally {
+        await sink.flush();
+        await sink.close();
       }
-      await sink.flush();
-      await sink.close();
+
+      if (!await file.exists() || await file.length() == 0) {
+        throw Exception('Downloaded file is empty');
+      }
+      if (total != null && total > 0 && received < total) {
+        throw Exception('Download truncated: received $received of $total bytes');
+      }
     } finally {
       client.close();
     }

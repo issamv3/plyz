@@ -6,9 +6,17 @@ class AppLocalizations {
       Localizations.of<AppLocalizations>(context, AppLocalizations) ??
       AppLocalizations(const Locale('en'));
   static const delegate = _AppLocalizationsDelegate();
-  static const supportedLocales = [Locale('en')];
-  bool get isArabic => false;
+  static const supportedLocales = [Locale('en'), Locale('ar')];
+  bool get isArabic => locale.languageCode == 'ar';
   static const Map<String, String> _strings = {
+    'audioMergeFailed': 'Audio could not be merged',
+    'audioTrackMissing': 'Audio track is missing from downloaded file',
+    'audioDownloadFailed': 'Audio stream download failed',
+    'details': 'Details',
+    'failed': 'Failed',
+    'savedWithoutAudio': 'Saved without audio',
+    'close': 'Close',
+    'technicalDetails': 'Technical Details',
     'appName': 'Ply',
     'splashSubtitle': 'Smart Video Player',
     'enterSource': 'Enter stream URL or paste MPD XML',
@@ -113,7 +121,37 @@ class AppLocalizations {
     'searchEmpty': 'Type to search',
     'searchNoResults': 'No results',
   };
-  String get(String key) => _strings[key] ?? key;
+
+  static const Map<String, String> _arStrings = {
+    'audioMergeFailed': 'تعذر دمج الصوت مع الفيديو',
+    'audioTrackMissing': 'مسار الصوت مفقود من الملف المحمل',
+    'audioDownloadFailed': 'فشل تحميل مسار الصوت',
+    'details': 'التفاصيل',
+    'failed': 'فشل',
+    'savedWithoutAudio': 'تم الحفظ بدون صوت',
+    'close': 'إغلاق',
+    'technicalDetails': 'التفاصيل التقنية',
+    'downloadFailed': 'فشل التحميل',
+    'downloadSuccess': 'تم الحفظ في المعرض',
+    'downloadMerging': 'جاري دمج الصوت والفيديو…',
+    'downloading': 'جاري التحميل…',
+    'downloadStarted': 'بدأ التحميل — راجع الإشعارات لمتابعة التقدم',
+    'cancelDownload': 'إلغاء التحميل',
+    'downloads': 'التنزيلات',
+  };
+
+  String get(String key) => isArabic
+      ? (_arStrings[key] ?? _strings[key] ?? key)
+      : (_strings[key] ?? key);
+
+  String get audioMergeFailed => get('audioMergeFailed');
+  String get audioTrackMissing => get('audioTrackMissing');
+  String get audioDownloadFailed => get('audioDownloadFailed');
+  String get details => get('details');
+  String get failed => get('failed');
+  String get savedWithoutAudio => get('savedWithoutAudio');
+  String get close => get('close');
+  String get technicalDetails => get('technicalDetails');
   String get appName => get('appName');
   String get splashSubtitle => get('splashSubtitle');
   String get enterSource => get('enterSource');
@@ -223,10 +261,10 @@ class _AppLocalizationsDelegate
     extends LocalizationsDelegate<AppLocalizations> {
   const _AppLocalizationsDelegate();
   @override
-  bool isSupported(Locale locale) => locale.languageCode == 'en';
+  bool isSupported(Locale locale) => locale.languageCode == 'en' || locale.languageCode == 'ar';
   @override
   Future<AppLocalizations> load(Locale locale) async =>
-      AppLocalizations(const Locale('en'));
+      AppLocalizations(locale);
   @override
   bool shouldReload(_AppLocalizationsDelegate old) => false;
 }

@@ -21,12 +21,28 @@ class DashRepresentation {
     }
     return '${(bandwidth / 1000000).toStringAsFixed(1)} Mbps';
   }
-  String get fullLabel => '$qualityLabel  ($bitrateLabel)';
+  String get cleanQualityLabel {
+    final cleaned = qualityLabel
+        .replaceAll(RegExp(r'\s*\b(HD|SD)\b', caseSensitive: false), '')
+        .trim();
+    if (cleaned.isNotEmpty) return cleaned;
+    if (height > 0) return '${height}p';
+    return qualityLabel;
+  }
+  String get fullLabel => '$cleanQualityLabel  ($bitrateLabel)';
   bool get isHd {
-    if (height >= 720) return true;
+    final match = RegExp(r'(\d+)p').firstMatch(qualityLabel.toLowerCase());
+    if (match != null) {
+      final pVal = int.tryParse(match.group(1)!);
+      if (pVal != null) return pVal >= 720;
+    }
+    if (width > 0 && height > 0) {
+      final minDim = width < height ? width : height;
+      return minDim >= 720;
+    }
     final parsed = int.tryParse(qualityLabel.replaceAll(RegExp(r'[^\d]'), ''));
     if (parsed != null && parsed >= 720) return true;
-    return false;
+    return height >= 720;
   }
   String get resolutionType => isHd ? 'HD' : 'SD';
   Map<String, dynamic> toJson() => {

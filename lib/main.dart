@@ -12,13 +12,18 @@ import 'screens/player_screen.dart';
 import 'screens/splash_screen.dart';
 import 'services/dash_xml_sanitizer.dart';
 import 'services/download_service.dart';
+import 'package:lucide_flutter/lucide_flutter.dart';
 import 'services/facebook_auth_service.dart';
 import 'services/notification_service.dart';
 import 'theme/app_theme.dart';
+import 'widgets/app_dialog.dart';
+
 final navigatorKey = GlobalKey<NavigatorState>();
+final rootMessengerKey = GlobalKey<ScaffoldMessengerState>();
 const _platform = MethodChannel('ply/media');
 Completer<Map<String, dynamic>?>? _intentCompleter;
 bool _intentHandled = false;
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final settings = SettingsProvider();
@@ -27,6 +32,94 @@ void main() async {
   await NotificationService.init();
   await DownloadService.init();
   NotificationService.onOpenDownload = _openDownloadedVideo;
+
+  DownloadService.downloadEvents.addListener(() {
+    final event = DownloadService.downloadEvents.value;
+    if (event == null) return;
+    final messenger = rootMessengerKey.currentState;
+    if (messenger == null) return;
+
+    final isError = event.type == DownloadEventType.error;
+    final isWarning = event.type == DownloadEventType.warning;
+    final bg = isError
+        ? const Color(0xFFC62828)
+        : (isWarning ? const Color(0xFFEF6C00) : const Color(0xFF2E7D32));
+
+    final ctx = navigatorKey.currentContext;
+    final l10n = ctx != null ? AppLocalizations.of(ctx) : null;
+    final detailsLabel = l10n?.details ?? 'Details';
+
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        backgroundColor: bg,
+        duration: Duration(seconds: isError ? 9 : 5),
+        content: Row(
+          children: [
+            Icon(
+              isError
+                  ? LucideIcons.alertCircle
+                  : (isWarning
+                      ? LucideIcons.alertTriangle
+                      : LucideIcons.checkCircle2),
+              color: Colors.white,
+              size: 20,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    event.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    event.message,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        action: event.details != null && event.details!.isNotEmpty
+            ? SnackBarAction(
+                label: detailsLabel,
+                textColor: const Color(0xFFFFD54F),
+                onPressed: () {
+                  final currentContext = navigatorKey.currentContext;
+                  if (currentContext != null) {
+                    AppDialog.showDetails(
+                      currentContext,
+                      title: event.title,
+                      message: event.message,
+                      details: event.details!,
+                      buttonLabel: l10n?.close ?? 'Close',
+                    );
+                  }
+                },
+              )
+            : null,
+      ),
+    );
+  });
+
   _platform.setMethodCallHandler((call) async {
     if (call.method == 'onIntent') {
       final raw = call.arguments;
@@ -167,6 +260,7 @@ class PlyApp extends StatelessWidget {
     final settings = context.watch<SettingsProvider>();
     return MaterialApp(
       navigatorKey: navigatorKey,
+      scaffoldMessengerKey: rootMessengerKey,
       title: 'Ply',
       debugShowCheckedModeBanner: false,
       themeMode: settings.themeMode,

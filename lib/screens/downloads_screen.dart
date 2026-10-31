@@ -318,12 +318,19 @@ class _ActiveThumb extends StatelessWidget {
               errorBuilder: (_, __, ___) => const SizedBox.shrink())
         else
           Container(
-            color: scheme.primary.withOpacity(0.15),
-            child: const Icon(LucideIcons.film,
-                color: Colors.white54, size: 28),
+            color: task.isFailed
+                ? scheme.error.withOpacity(0.15)
+                : scheme.primary.withOpacity(0.15),
+            child: Icon(
+              task.isFailed ? LucideIcons.alertCircle : LucideIcons.film,
+              color: task.isFailed ? scheme.error : Colors.white54,
+              size: 28,
+            ),
           ),
         Container(color: Colors.black45),
-        if (!task.isQueued) ...[
+        if (task.isFailed)
+          Icon(LucideIcons.alertCircle, color: scheme.error, size: 28)
+        else if (!task.isQueued) ...[
           SizedBox(
             width: 38,
             height: 38,
@@ -347,7 +354,7 @@ class _ActiveThumb extends StatelessWidget {
           ),
         ] else
           const Icon(LucideIcons.clock, color: Colors.white70, size: 22),
-        if (task.isPaused)
+        if (task.isPaused && !task.isFailed)
           const Icon(LucideIcons.pause,
               color: Colors.orangeAccent, size: 18),
       ],
@@ -371,18 +378,26 @@ class _ActiveDownloadTile extends StatelessWidget {
   });
   @override
   Widget build(BuildContext context) {
-    final statusColor = task.isPaused
-        ? Colors.orange
-        : task.isQueued
-            ? scheme.onSurfaceVariant
-            : scheme.primary;
+    final l10n = AppLocalizations.of(context);
+    final statusColor = task.isFailed
+        ? scheme.error
+        : task.isPaused
+            ? Colors.orange
+            : task.isQueued
+                ? scheme.onSurfaceVariant
+                : scheme.primary;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       decoration: BoxDecoration(
-        color: scheme.primaryContainer.withOpacity(0.25),
+        color: task.isFailed
+            ? scheme.errorContainer.withOpacity(0.25)
+            : scheme.primaryContainer.withOpacity(0.25),
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-            color: scheme.primary.withOpacity(0.25), width: 1),
+            color: task.isFailed
+                ? scheme.error.withOpacity(0.4)
+                : scheme.primary.withOpacity(0.25),
+            width: 1),
       ),
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -412,18 +427,24 @@ class _ActiveDownloadTile extends StatelessWidget {
                   const SizedBox(height: 6),
                   Row(
                     children: [
-                      Text(
-                        task.isQueued
-                            ? 'Waiting…'
-                            : task.isPaused
-                                ? 'Paused'
-                                : task.status,
-                        style: TextStyle(
-                            color: statusColor,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600),
+                      Expanded(
+                        child: Text(
+                          task.isFailed
+                              ? '${l10n.failed}: ${task.errorReason ?? ""}'
+                              : task.isQueued
+                                  ? 'Waiting…'
+                                  : task.isPaused
+                                      ? 'Paused'
+                                      : task.status,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              color: statusColor,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600),
+                        ),
                       ),
-                      if (speedLabel.isNotEmpty && !task.isPaused) ...[
+                      if (!task.isFailed && speedLabel.isNotEmpty && !task.isPaused) ...[
                         const SizedBox(width: 8),
                         Container(
                           padding: const EdgeInsets.symmetric(
@@ -453,7 +474,7 @@ class _ActiveDownloadTile extends StatelessWidget {
                       ],
                     ],
                   ),
-                  if (!task.isQueued) ...[
+                  if (!task.isQueued && !task.isFailed) ...[
                     const SizedBox(height: 8),
                     ClipRRect(
                       borderRadius: BorderRadius.circular(4),
@@ -475,7 +496,23 @@ class _ActiveDownloadTile extends StatelessWidget {
             Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (!task.isQueued)
+                if (task.isFailed && task.errorDetails != null)
+                  IconButton(
+                    icon: Icon(LucideIcons.info,
+                        color: scheme.error, size: 18),
+                    tooltip: l10n.details,
+                    onPressed: () {
+                      AppDialog.showDetails(
+                        context,
+                        title: task.title,
+                        message: task.errorReason ?? l10n.downloadFailed,
+                        details: task.errorDetails!,
+                        buttonLabel: l10n.close,
+                      );
+                    },
+                    visualDensity: VisualDensity.compact,
+                  )
+                else if (!task.isQueued && !task.isFailed)
                   IconButton(
                     icon: Icon(
                       task.isPaused
@@ -493,7 +530,7 @@ class _ActiveDownloadTile extends StatelessWidget {
                 IconButton(
                   icon: Icon(LucideIcons.x,
                       color: scheme.error, size: 18),
-                  tooltip: 'Cancel',
+                  tooltip: task.isFailed ? l10n.close : 'Cancel',
                   onPressed: onCancel,
                   visualDensity: VisualDensity.compact,
                 ),
