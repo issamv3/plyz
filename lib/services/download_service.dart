@@ -4,7 +4,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
-import 'package:video_player/video_player.dart';
 import '../models/dash_representation.dart';
 import '../models/download_record.dart';
 import 'cdn_service.dart';
@@ -250,8 +249,6 @@ class DownloadService {
           ? 'video'
           : title.trim().replaceAll(RegExp(r'[^\w\s\-\u0600-\u06FF]'), '_');
 
-      // For custom titles use the title as-is for the filename; only append
-      // a timestamp for auto-generated (empty) titles to guarantee uniqueness.
       String fileId;
       if (isDefaultTitle) {
         fileId = 'video_${DateTime.now().millisecondsSinceEpoch}';
@@ -267,6 +264,7 @@ class DownloadService {
       final outFile = File(outputPath);
       if (await outFile.exists()) await outFile.delete();
 
+      // Local file case
       if (!p.isDash && !p.isNetwork) {
         updateTask(DownloadTask(
             id: id,
@@ -283,6 +281,7 @@ class DownloadService {
           filePath: outputPath,
           isDash: p.isDash,
           durationMs: p.durationMs,
+          initialThumbnailPath: thumbnailPath,
         );
         await NotificationService.showComplete(title, filePath: outputPath);
         return;
@@ -293,10 +292,7 @@ class DownloadService {
 
       if (p.isDash && p.mpdContent != null) {
         final effectiveMpd = p.fbCdnEnabled
-            ? CdnService.rewriteMpdContent(
-                p.mpdContent!,
-                fbCdnEnabled: true,
-              )
+            ? CdnService.rewriteMpdContent(p.mpdContent!, fbCdnEnabled: true)
             : p.mpdContent!;
         final videoReps = DashParser.parse(effectiveMpd);
         final maybeVideoUrl = resolveVideoUrl(videoReps, p.selectedVideoRep);
@@ -306,8 +302,11 @@ class DownloadService {
         }
         resolvedVideoUrl = maybeVideoUrl.replaceAll('&amp;', '&');
         final audioRep = DashParser.bestAudio(effectiveMpd);
-        if (audioRep != null && audioRep.baseUrl != resolvedVideoUrl) {
-          audioUrl = audioRep.baseUrl.replaceAll('&amp;', '&');
+        if (audioRep != null && audioRep.baseUrl.isNotEmpty) {
+          final cleanAudioUrl = audioRep.baseUrl.replaceAll('&amp;', '&');
+          if (cleanAudioUrl != resolvedVideoUrl) {
+            audioUrl = cleanAudioUrl;
+          }
         }
       } else {
         resolvedVideoUrl = CdnService.rewrite(
@@ -317,17 +316,19 @@ class DownloadService {
       }
 
       final stamp = DateTime.now().microsecondsSinceEpoch;
+      // Use .mp4 extensions so Android native extractors recognize media format instantly
       final stagedVideoPath = '${tempDir.path}/${safeTitle}_v_$stamp.mp4';
       final stagedAudioPath =
-          audioUrl != null ? '${tempDir.path}/${safeTitle}_a_$stamp.m4a' : null;
+          audioUrl != null ? '${tempDir.path}/${safeTitle}_a_$stamp.mp4' : null;
 
       await NotificationService.showProgress(
           title: title, body: 'Downloading… 0%', progress: 0);
 
-      final videoWeight = audioUrl != null ? 0.7 : 1.0;
-      final audioWeight = audioUrl != null ? 0.3 : 0.0;
+      final videoWeight = audioUrl != null ? 0.70 : 0.88;
+      final audioWeight = audioUrl != null ? 0.18 : 0.0;
       var lastPct = -1;
 
+      // 1. Download Video stream
       await _downloadToFile(
         resolvedVideoUrl,
         stagedVideoPath,
@@ -335,7 +336,7 @@ class DownloadService {
         onProgress: (received, total, speedBps) {
           if (total == null || total <= 0) return;
           final pct =
-              (received / total * videoWeight * 100).clamp(0, 89).toInt();
+              (received / total * videoWeight * 100).clamp(0, 88).toInt();
           if (pct > lastPct) {
             lastPct = pct;
             updateTask(DownloadTask(
@@ -354,6 +355,7 @@ class DownloadService {
       );
       stagedFiles.add(File(stagedVideoPath));
 
+      // 2. Download Audio stream (if separate)
       if (audioUrl != null && stagedAudioPath != null) {
         await _downloadToFile(
           audioUrl,
@@ -362,8 +364,8 @@ class DownloadService {
           onProgress: (received, total, speedBps) {
             if (total == null || total <= 0) return;
             final pct =
-                ((videoWeight + received / total * audioWeight) * 100)
-                    .clamp(0, 89)
+                ((videoWeight + (received / total * audioWeight)) * 100)
+                    .clamp(0, 88)
                     .toInt();
             if (pct > lastPct) {
               lastPct = pct;
@@ -386,6 +388,7 @@ class DownloadService {
 
       if (job.cancelRequested) throw const _CancelException();
 
+      // 3. Merge Video and Audio
       updateTask(DownloadTask(
           id: id,
           title: title,
@@ -399,7 +402,7 @@ class DownloadService {
       String? muxError;
 
       if (audioUrl == null || stagedAudioPath == null) {
-        // Direct stream or single stream already has audio and video combined
+        // Direct stream or single stream: copy directly
         try {
           await File(stagedVideoPath).copy(outputPath);
           muxed = true;
@@ -416,11 +419,12 @@ class DownloadService {
               false;
         } on PlatformException catch (e) {
           muxError = e.message ?? e.code;
+        } catch (e) {
+          muxError = e.toString();
         }
 
-        // If native muxing fails, fallback to saving the video file directly
-        // so the user never loses the downloaded content!
-        if (!muxed) {
+        // If native muxing fails, ensure user does not lose video
+        if (!muxed || !await File(outputPath).exists() || await File(outputPath).length() == 0) {
           try {
             await File(stagedVideoPath).copy(outputPath);
             muxed = true;
@@ -428,11 +432,12 @@ class DownloadService {
         }
       }
 
-      if (muxed) {
+      if (muxed && await File(outputPath).exists()) {
         updateTask(DownloadTask(
             id: id, title: title, progress: 98, status: 'Saving…'));
         await NotificationService.showProgress(
-            title: title, body: 'Saving to gallery…', progress: 98);
+            title: title, body: 'Saving…', progress: 98);
+
         await _persistToLibrary(
           id: fileId,
           title: title,
@@ -441,12 +446,13 @@ class DownloadService {
           durationMs: p.durationMs,
           initialThumbnailPath: thumbnailPath,
         );
+
         await NotificationService.showComplete(title, filePath: outputPath);
       } else {
         try {
           await outFile.delete();
         } catch (_) {}
-        await NotificationService.showError(title, muxError ?? 'Merge failed');
+        await NotificationService.showError(title, muxError ?? 'Download failed');
       }
     } on _CancelException {
       try {
@@ -457,7 +463,7 @@ class DownloadService {
     } finally {
       for (final f in stagedFiles) {
         try {
-          await f.delete();
+          if (await f.exists()) await f.delete();
         } catch (_) {}
       }
       _onJobDone(id);
@@ -484,8 +490,8 @@ class DownloadService {
   }
 
   static Future<Directory> _thumbnailsDirectory() async {
-    final appDocs = await getApplicationDocumentsDirectory();
-    final dir = Directory('${appDocs.path}/Ply/thumbnails');
+    final root = await _publicPlyRoot();
+    final dir = Directory('$root/Ply/thumbnails');
     if (!await dir.exists()) await dir.create(recursive: true);
     return dir;
   }
@@ -506,20 +512,13 @@ class DownloadService {
                 p.endsWith('.webm');
           })
           .toList();
+
       for (final file in files) {
         if (existingPaths.contains(file.path)) continue;
         final name = file.uri.pathSegments.last;
         final title =
             name.contains('.') ? name.substring(0, name.lastIndexOf('.')) : name;
         final id = 'scan_${file.path.hashCode.abs()}';
-
-        int durationMs = 0;
-        try {
-          final ctrl = VideoPlayerController.file(file);
-          await ctrl.initialize();
-          durationMs = ctrl.value.duration.inMilliseconds;
-          await ctrl.dispose();
-        } catch (_) {}
 
         String? thumbnailPath;
         try {
@@ -540,7 +539,7 @@ class DownloadService {
           id: id,
           title: title,
           filePath: file.path,
-          durationMs: durationMs,
+          durationMs: 0,
           thumbnailPath: thumbnailPath,
           isDash: false,
           downloadedAtMs: file.statSync().modified.millisecondsSinceEpoch,
@@ -557,17 +556,9 @@ class DownloadService {
     int? durationMs,
     String? initialThumbnailPath,
   }) async {
-    var resolvedDuration = durationMs ?? 0;
-    if (resolvedDuration <= 0) {
-      try {
-        final controller = VideoPlayerController.file(File(filePath));
-        await controller.initialize();
-        resolvedDuration = controller.value.duration.inMilliseconds;
-        await controller.dispose();
-      } catch (_) {}
-    }
-
+    final resolvedDuration = durationMs ?? 0;
     String? thumbnailPath;
+
     try {
       final thumbsDir = await _thumbnailsDirectory();
       final candidatePath = '${thumbsDir.path}/$id.jpg';

@@ -6,7 +6,15 @@ class DashParser {
       RegExp(r'<Title\b[^>]*>([\s\S]*?)<\/Title>', caseSensitive: false);
 
   static List<DashRepresentation> parse(String xmlContent) {
-    return _parseByType(xmlContent, 'video');
+    final list = _parseByType(xmlContent, 'video');
+    // Prioritize AVC/H.264 video for standard compatibility
+    list.sort((a, b) {
+      if (b.height != a.height) {
+        return b.height.compareTo(a.height);
+      }
+      return b.bandwidth.compareTo(a.bandwidth);
+    });
+    return list;
   }
 
   /// Extracts audio representations (used by the downloader to find a track
@@ -20,7 +28,48 @@ class DashParser {
   /// track, or null if the manifest has no separate audio representation.
   static DashRepresentation? bestAudio(String xmlContent) {
     final reps = parseAudio(xmlContent);
-    return reps.isEmpty ? null : reps.first;
+    if (reps.isNotEmpty) {
+      reps.sort((a, b) => b.bandwidth.compareTo(a.bandwidth));
+      return reps.first;
+    }
+
+    // Fallback: search for any Representation with audio hints in attributes or BaseURL
+    try {
+      final doc = XmlDocument.parse(xmlContent);
+      for (final rep in doc.findAllElements('Representation')) {
+        final id = (rep.getAttribute('id') ?? '').toLowerCase();
+        final tag = (rep.getAttribute('FBEncodingTag') ?? '').toLowerCase();
+        final codecs = (rep.getAttribute('codecs') ?? '').toLowerCase();
+        final mime = (rep.getAttribute('mimeType') ?? '').toLowerCase();
+        final baseUrl = _extractBaseUrl(rep);
+
+        final isAudio = codecs.contains('mp4a') ||
+            codecs.contains('aac') ||
+            codecs.contains('opus') ||
+            codecs.contains('audio') ||
+            tag.contains('audio') ||
+            mime.contains('audio') ||
+            id.contains('audio') ||
+            id.endsWith('a') ||
+            baseUrl.contains('audio');
+
+        if (isAudio && baseUrl.isNotEmpty) {
+          final bandwidth =
+              int.tryParse(rep.getAttribute('bandwidth') ?? '0') ?? 0;
+          return DashRepresentation(
+            id: id,
+            baseUrl: baseUrl,
+            bandwidth: bandwidth,
+            width: 0,
+            height: 0,
+            contentType: 'audio',
+            qualityLabel: 'Audio',
+          );
+        }
+      }
+    } catch (_) {}
+
+    return null;
   }
 
   static List<DashRepresentation> _parseByType(
@@ -142,11 +191,14 @@ class DashParser {
     final direct = el.getAttribute('contentType')?.toLowerCase();
     if (direct == 'video' || direct == 'audio') return direct!;
 
-    final mime = (el.getAttribute('mimeType') ?? '').toLowerCase();
-    if (mime.startsWith('video/')) return 'video';
-    if (mime.startsWith('audio/')) return 'audio';
-
+    // Check codecs FIRST (essential because MP4 container can hold either)
     final codecs = (el.getAttribute('codecs') ?? '').toLowerCase();
+    if (codecs.startsWith('mp4a') ||
+        codecs.startsWith('opus') ||
+        codecs.startsWith('aac') ||
+        codecs.contains('audio')) {
+      return 'audio';
+    }
     if (codecs.startsWith('avc') ||
         codecs.startsWith('mp4v') ||
         codecs.startsWith('hvc') ||
@@ -156,23 +208,32 @@ class DashParser {
         codecs.startsWith('av01')) {
       return 'video';
     }
-    if (codecs.startsWith('mp4a') ||
-        codecs.startsWith('opus') ||
-        codecs.startsWith('aac') ||
-        codecs.contains('audio')) {
-      return 'audio';
-    }
 
-    if (el.getAttribute('audioSamplingRate') != null ||
+    final mime = (el.getAttribute('mimeType') ?? '').toLowerCase();
+    if (mime.startsWith('audio/')) return 'audio';
+    if (mime.startsWith('video/') && !mime.endsWith('mp4')) return 'video';
+
+    // Check attributes or Facebook encoding tags
+    final id = (el.getAttribute('id') ?? '').toLowerCase();
+    final tag = (el.getAttribute('FBEncodingTag') ?? '').toLowerCase();
+    if (tag.contains('audio') ||
+        id.endsWith('a') ||
+        el.getAttribute('audioSamplingRate') != null ||
         el.findAllElements('AudioChannelConfiguration').isNotEmpty) {
       return 'audio';
     }
 
     final width = int.tryParse(el.getAttribute('width') ?? '0') ?? 0;
     final height = int.tryParse(el.getAttribute('height') ?? '0') ?? 0;
-    if (width > 0 || height > 0 || el.getAttribute('frameRate') != null) {
+    if (width > 0 ||
+        height > 0 ||
+        el.getAttribute('frameRate') != null ||
+        tag.contains('video') ||
+        id.endsWith('v')) {
       return 'video';
     }
+
+    if (mime.startsWith('video/')) return 'video';
 
     for (final child in el.children.whereType<XmlElement>()) {
       final childType = _resolveContentType(child);

@@ -40,21 +40,12 @@ class HistoryEntry {
         return true;
       }
     }
-    if (fbVideoId != null && fbVideoId!.isNotEmpty) {
-      return true;
-    }
     final path = videoPath.toLowerCase();
     if (path.contains('facebook.com') ||
         path.contains('fb.watch') ||
         path.contains('fb.me') ||
-        path.contains('fbcdn.net')) {
+        path.contains('fb.gg')) {
       return true;
-    }
-    if (mpdContent != null) {
-      final mpd = mpdContent!.toLowerCase();
-      if (mpd.contains('facebook.com') || mpd.contains('fbcdn.net')) {
-        return true;
-      }
     }
     return false;
   }
